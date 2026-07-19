@@ -74,9 +74,148 @@
   .icon-btn{background:none; border:none; cursor:pointer; padding:2px 6px; font-size:14px;}
   .icon-btn:hover{background:var(--surface-1); border-radius:6px;}
   .mini-input{width:100%; padding:5px 6px; font-size:12px;}
+
+  /* ---- 접근 잠금 화면 & 게스트 배지 ---- */
+  #lockScreen{position:fixed; inset:0; background:linear-gradient(160deg,#0F1826,#1B2A40); display:flex; align-items:center; justify-content:center; z-index:9999; padding:20px;}
+  #lockScreen.hidden{display:none;}
+  .lock-card{background:var(--surface); border-radius:16px; padding:2rem 1.75rem; width:100%; max-width:340px; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.35);}
+  .lock-card img{width:64px; height:auto; margin-bottom:10px;}
+  .lock-card h1{font-size:15px; margin:0 0 4px; color:var(--text);}
+  .lock-card p{font-size:12px; color:var(--text-muted); margin:0 0 16px; line-height:1.5;}
+  .lock-card input{width:100%; text-align:center; letter-spacing:2px; margin-bottom:10px;}
+  .lock-card button{width:100%; justify-content:center;}
+  .lock-error{color:var(--danger); font-size:12px; min-height:16px; margin-top:8px;}
+  #guestBadge{position:fixed; bottom:16px; left:136px; z-index:9998; background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); font-size:11px; font-weight:bold; padding:6px 12px; border-radius:14px; box-shadow:0 2px 8px rgba(0,0,0,0.2);}
+  #guestBadge.hidden{display:none;}
 </style>
 </head>
 <body>
+
+<!-- ===================== 접근 잠금 화면 ===================== -->
+<div id="lockScreen">
+  <div class="lock-card">
+    <img src="./apple-touch-icon.png" alt="Lifepilot Portfolio 로고">
+    <h1>Lifepilot Portfolio</h1>
+    <p>비밀번호를 입력해야 이용할 수 있습니다.</p>
+    <input type="password" id="lockPwInput" class="mini-input" placeholder="비밀번호" autocomplete="off" inputmode="text">
+    <button class="primary" id="lockSubmitBtn" onclick="checkLockPassword()">확인</button>
+    <div class="lock-error" id="lockError"></div>
+  </div>
+</div>
+<div id="guestBadge" class="hidden"></div>
+
+<script>
+/* ===================== 접근 잠금(비밀번호) =====================
+   ▼▼▼ 비밀번호나 기간을 바꾸고 싶으면 이 상자 안의 값만 고치세요 ▼▼▼
+   (메모장/GitHub 편집화면에서 따옴표 안의 글자만 바꾸면 됩니다. 코드 구조는 안 건드려도 됩니다.)
+*/
+
+// 본인 고정 비밀번호: 언제 입력해도 항상 통과되며, 기간 만료가 없습니다.
+const OWNER_PASSWORD = '23442721';
+
+// 게스트(공유용) 기간한정 비밀번호 목록: 정해둔 기간 안에서만 통과되고, 지나면 자동으로 막힙니다.
+// label은 통과했을 때 화면 좌측 하단에 표시되는 문구입니다.
+// 기간을 새로 추가하고 싶으면 { } 블록을 통째로 복사해서 아래에 쉼표(,)로 이어 붙이면 됩니다.
+const GUEST_PERIODS = [
+  { password: 'guest0719', start: '2026-07-19', end: '2027-06-30', label: '베타버전' },
+  { password: 'beta0719', start: '2026-07-19', end: '2026-09-30', label: '베타버전' }
+  // 예시: 새 기간 추가 시 아래 줄의 주석(//)을 지우고 날짜/비밀번호만 바꿔서 사용하세요.
+  // , { password: '새비밀번호', start: '2026-09-01', end: '2026-09-15', label: '베타버전' }
+];
+
+/* ▲▲▲ 여기까지만 고치면 됩니다. 아래쪽 코드는 그대로 두세요 ▲▲▲ */
+
+const AUTH_KEY = 'imm_auth_v1';
+
+function todayISOForAuth() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`;
+}
+
+function isPeriodValidNow(period) {
+  const today = todayISOForAuth();
+  return today >= period.start && today <= period.end;
+}
+
+function showGuestBadge(label, end) {
+  const badge = document.getElementById('guestBadge');
+  badge.textContent = `⏳ ${label} · ~${end}까지`;
+  badge.classList.remove('hidden');
+}
+
+function unlockApp() {
+  document.getElementById('lockScreen').classList.add('hidden');
+}
+
+function lockApp(message) {
+  document.getElementById('lockScreen').classList.remove('hidden');
+  document.getElementById('guestBadge').classList.add('hidden');
+  if (message) document.getElementById('lockError').textContent = message;
+}
+
+// 페이지를 열 때마다: 이전에 저장된 인증 정보를 "지금 코드에 적힌 비밀번호 값"과 다시 대조한다.
+// 단순히 "예전에 인증됨" 기록만 보고 통과시키지 않고, 그때 썼던 비밀번호가 지금도
+// 여전히 유효한 비밀번호인지 매번 새로 확인한다. 그래야 비밀번호를 바꾸는 순간
+// 이미 열어봤던 기기도 새 비밀번호를 다시 입력하도록 강제된다.
+(function checkStoredAuth() {
+  let stored = null;
+  try { stored = JSON.parse(localStorage.getItem(AUTH_KEY)); } catch (e) {}
+  if (!stored) return;
+
+  if (stored.type === 'owner') {
+    if (stored.pw === OWNER_PASSWORD) {
+      unlockApp();
+    } else {
+      localStorage.removeItem(AUTH_KEY);
+      lockApp('비밀번호가 변경되어 다시 로그인해야 합니다.');
+    }
+  } else if (stored.type === 'guest') {
+    const period = GUEST_PERIODS.find(p => p.password === stored.pw);
+    if (period && isPeriodValidNow(period)) {
+      unlockApp();
+      showGuestBadge(period.label, period.end);
+    } else {
+      localStorage.removeItem(AUTH_KEY);
+      lockApp(period ? '공유용 비밀번호 사용 기간이 만료되었습니다.' : '비밀번호가 변경되어 다시 로그인해야 합니다.');
+    }
+  }
+})();
+
+function checkLockPassword() {
+  const input = document.getElementById('lockPwInput');
+  const pw = input.value;
+  if (!pw) return;
+
+  if (pw === OWNER_PASSWORD) {
+    localStorage.setItem(AUTH_KEY, JSON.stringify({ type: 'owner', pw: pw }));
+    document.getElementById('lockError').textContent = '';
+    unlockApp();
+    return;
+  }
+
+  const matchedPeriod = GUEST_PERIODS.find(p => p.password === pw);
+  if (matchedPeriod) {
+    if (isPeriodValidNow(matchedPeriod)) {
+      localStorage.setItem(AUTH_KEY, JSON.stringify({ type: 'guest', pw: pw }));
+      document.getElementById('lockError').textContent = '';
+      unlockApp();
+      showGuestBadge(matchedPeriod.label, matchedPeriod.end);
+    } else {
+      document.getElementById('lockError').textContent = '이 비밀번호는 사용 기간이 지났습니다.';
+    }
+    return;
+  }
+
+  document.getElementById('lockError').textContent = '비밀번호가 올바르지 않습니다.';
+  input.value = '';
+  input.focus();
+}
+
+document.getElementById('lockPwInput').addEventListener('keydown', (e) => {
+  if (e.key === 'Enter') checkLockPassword();
+});
+</script>
+
 <div class="app">
   <nav id="nav"></nav>
   <main id="main"></main>
