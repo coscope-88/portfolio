@@ -87,6 +87,14 @@
   .lock-error{color:var(--danger); font-size:12px; min-height:16px; margin-top:8px;}
   #guestBadge{position:fixed; bottom:16px; left:136px; z-index:9998; background:var(--warn-bg); color:var(--warn); border:1px solid var(--warn); font-size:11px; font-weight:bold; padding:6px 12px; border-radius:14px; box-shadow:0 2px 8px rgba(0,0,0,0.2);}
   #guestBadge.hidden{display:none;}
+
+  /* ---- 앱 내부 확인창(브라우저 기본 confirm 대체) ---- */
+  #appConfirm{position:fixed; inset:0; background:rgba(20,24,32,0.55); display:flex; align-items:center; justify-content:center; z-index:9997; padding:20px;}
+  #appConfirm.hidden{display:none;}
+  .confirm-card{background:var(--surface); border-radius:14px; padding:1.5rem 1.5rem 1.25rem; width:100%; max-width:320px; text-align:center; box-shadow:0 12px 40px rgba(0,0,0,0.3);}
+  .confirm-card p{font-size:14px; color:var(--text); margin:0 0 18px; line-height:1.6; white-space:pre-line;}
+  .confirm-actions{display:flex; gap:8px;}
+  .confirm-actions button{flex:1; justify-content:center;}
 </style>
 </head>
 <body>
@@ -103,6 +111,46 @@
   </div>
 </div>
 <div id="guestBadge" class="hidden"></div>
+
+<!-- ===================== 앱 내부 확인창(브라우저 기본 confirm 대체) ===================== -->
+<div id="appConfirm" class="hidden">
+  <div class="confirm-card">
+    <p id="appConfirmMessage"></p>
+    <div class="confirm-actions">
+      <button id="appConfirmCancelBtn">취소</button>
+      <button class="primary" id="appConfirmOkBtn">확인</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// 브라우저 기본 confirm() 창은 주소(도메인)가 같이 표시되어 앱스럽지 않아서,
+// 앱 디자인에 맞는 팝업으로 대체한다. 기존 confirm()과 똑같이
+//   if (!(await showConfirm('메시지'))) return;
+// 형태로 쓰면 된다(단, 이 함수를 쓰는 함수 앞에는 async가 붙어 있어야 함).
+function showConfirm(message) {
+  return new Promise((resolve) => {
+    const modal = document.getElementById('appConfirm');
+    document.getElementById('appConfirmMessage').textContent = message;
+    modal.classList.remove('hidden');
+
+    const okBtn = document.getElementById('appConfirmOkBtn');
+    const cancelBtn = document.getElementById('appConfirmCancelBtn');
+
+    function cleanup(result) {
+      modal.classList.add('hidden');
+      okBtn.removeEventListener('click', onOk);
+      cancelBtn.removeEventListener('click', onCancel);
+      resolve(result);
+    }
+    function onOk() { cleanup(true); }
+    function onCancel() { cleanup(false); }
+
+    okBtn.addEventListener('click', onOk);
+    cancelBtn.addEventListener('click', onCancel);
+  });
+}
+</script>
 
 <script>
 /* ===================== 접근 잠금(비밀번호) =====================
@@ -702,9 +750,9 @@ let stockSearchComposing = false;
 // "비율만 보기" 상태에서 "금액 표시"로 전환할 때는 실수로 금액이 노출되지 않도록
 // 한 번 더 확인(확인/취소)을 받은 뒤에만 금액을 표시한다.
 // 반대로 금액 표시 -> 비율만 보기로 가릴 때는 확인 없이 바로 적용한다.
-function toggleRatioOnly(renderFn){
+async function toggleRatioOnly(renderFn){
   if(state.ratioOnly){
-    if(!confirm('금액을 표시하시겠습니까?')) return;
+    if(!(await showConfirm('금액을 표시하시겠습니까?'))) return;
     state.ratioOnly = false;
   } else {
     state.ratioOnly = true;
@@ -716,7 +764,8 @@ const state = {
   member:'전체',
   periodPreset:'1개월',
   customStart:null, customEnd:null,
-  ratioOnly:false,
+  ratioOnly:true, // 앱을 처음 열었을 때는 금액을 감춘 "비율만 보기" 상태로 시작하도록 기본값을 true로 설정
+
   settingsTab:'ref',
   resetOption:null,
   editingRow:null,
@@ -2079,8 +2128,8 @@ function editManualHolding(key){
   };
   renderManual();
 }
-function deleteManualHolding(key){
-  if(!confirm('이 항목을 삭제할까요?')) return;
+async function deleteManualHolding(key){
+  if(!(await showConfirm('이 항목을 삭제할까요?'))) return;
   save(LS.holdings, loadHoldings().filter(h=>holdKeyOf(h)!==key));
   renderManual();
 }
@@ -2113,8 +2162,8 @@ function editManualCashflow(key){
   state.manualCf = { 날짜:c.날짜, 계좌코드:c.계좌코드, 구분:c.구분, 금액:c.금액, 메모:c.메모||'', editKey:key };
   renderManual();
 }
-function deleteManualCashflow(key){
-  if(!confirm('이 항목을 삭제할까요?')) return;
+async function deleteManualCashflow(key){
+  if(!(await showConfirm('이 항목을 삭제할까요?'))) return;
   save(LS.cashflows, loadCashflows().filter(c=>cfKeyOf(c)!==key));
   renderManual();
 }
@@ -2346,7 +2395,7 @@ function refBlock(title, values, upsertFnName, removeFnName, inputId){
         <tr><th>${title}</th><th style="width:50px;"></th></tr>
         ${values.map(v=>`
           <tr><td>${v}</td><td style="text-align:right;">
-            <button class="icon-btn" onclick="if(confirm('${v} 항목을 삭제할까요?')){ ${removeFnName}('${v}'); renderSettings(); }">🗑</button>
+            <button class="icon-btn" onclick="(async()=>{ if(await showConfirm('${v} 항목을 삭제할까요?')){ ${removeFnName}('${v}'); renderSettings(); } })()">🗑</button>
           </td></tr>
         `).join('') || `<tr><td colspan="2" class="muted">등록된 항목이 없습니다.</td></tr>`}
       </table>
@@ -2398,7 +2447,7 @@ function accountPanel(){
           <tbody>
           ${list.map(a=>`
             <tr><td>${a.계좌명}</td><td>${a.구성원}</td><td>${a.증권사}</td><td>${a.계좌종류}</td>
-            <td style="text-align:right;"><button class="icon-btn" onclick="if(confirm('${a.계좌명} 계좌를 삭제할까요?')){ removeAccount('${a.계좌코드}'); renderSettings(); }">🗑</button></td></tr>
+            <td style="text-align:right;"><button class="icon-btn" onclick="(async()=>{ if(await showConfirm('${a.계좌명} 계좌를 삭제할까요?')){ removeAccount('${a.계좌코드}'); renderSettings(); } })()">🗑</button></td></tr>
           `).join('') || '<tr><td colspan="5" class="muted">등록된 계좌가 없습니다.</td></tr>'}
           </tbody>
         </table>
@@ -2415,7 +2464,7 @@ function accountPanel(){
     </div>
   `;
 }
-function addAccountFromForm(){
+async function addAccountFromForm(){
   const name = document.getElementById('acctName').value.trim();
   const member = document.getElementById('acctMember').value;
   const broker = document.getElementById('acctBroker').value;
@@ -2423,7 +2472,7 @@ function addAccountFromForm(){
   if(!name || !member){ toast('계좌명/구성원은 필수입니다.'); return; }
   const list = loadAccountMaster();
   const dup = list.some(a=>a.계좌명===name);
-  if(dup && !confirm(`이미 등록된 계좌명입니다: ${name}\n계속 진행하면 기존 계좌 정보가 수정됩니다. 계속하시겠습니까?`)) return;
+  if(dup && !(await showConfirm(`이미 등록된 계좌명입니다: ${name}\n계속 진행하면 기존 계좌 정보가 수정됩니다. 계속하시겠습니까?`))) return;
   upsertAccount({계좌코드:name, 구성원:member, 증권사:broker, 계좌종류:type, 계좌명:name});
   renderSettings();
 }
@@ -2454,7 +2503,7 @@ function stockPanel(){
           <tbody>
           ${list.map(s=>`
             <tr><td>${s.종목코드}</td><td>${s.종목명}</td><td>${s.대분류}</td><td>${s.중분류}</td><td>${s.국가}</td>
-            <td style="text-align:right;"><button class="icon-btn" onclick="if(confirm('${s.종목코드} 종목을 삭제할까요?')){ removeStock('${s.종목코드}'); renderSettings(); }">🗑</button></td></tr>
+            <td style="text-align:right;"><button class="icon-btn" onclick="(async()=>{ if(await showConfirm('${s.종목코드} 종목을 삭제할까요?')){ removeStock('${s.종목코드}'); renderSettings(); } })()">🗑</button></td></tr>
           `).join('') || '<tr><td colspan="6" class="muted">등록된 종목이 없습니다.</td></tr>'}
           </tbody>
         </table>
@@ -2472,7 +2521,7 @@ function stockPanel(){
     </div>
   `;
 }
-function addStockFromForm(){
+async function addStockFromForm(){
   const code = document.getElementById('stkCode').value.trim();
   const name = document.getElementById('stkName').value.trim();
   const major = document.getElementById('stkMajor').value;
@@ -2482,8 +2531,8 @@ function addStockFromForm(){
   const list = loadStockMaster();
   const dupCode = list.some(s=>s.종목코드===code);
   const dupName = list.some(s=>s.종목명===name);
-  if(dupCode && !confirm(`이미 등록된 종목코드입니다: ${code}\n계속 진행하면 기존 종목 정보가 수정됩니다. 계속하시겠습니까?`)) return;
-  if(!dupCode && dupName && !confirm(`이미 동일한 종목명이 존재합니다: ${name}\n그래도 추가하시겠습니까?`)) return;
+  if(dupCode && !(await showConfirm(`이미 등록된 종목코드입니다: ${code}\n계속 진행하면 기존 종목 정보가 수정됩니다. 계속하시겠습니까?`))) return;
+  if(!dupCode && dupName && !(await showConfirm(`이미 동일한 종목명이 존재합니다: ${name}\n그래도 추가하시겠습니까?`))) return;
   upsertStock({종목코드:code, 종목명:name, 대분류:major, 중분류:mid, 국가:country});
   renderSettings();
 }
@@ -2644,15 +2693,15 @@ function resetPanel(){
     </div>
   `;
 }
-function executeReset(){
+async function executeReset(){
   const opt = state.resetOption;
-  if(!opt){ alert('먼저 초기화할 항목을 선택해주세요.'); return; }
+  if(!opt){ toast('먼저 초기화할 항목을 선택해주세요.'); return; }
   if(opt==='all'){
-    if(!confirm('⚠ 정말로 모든 데이터를 초기화하시겠습니까?\n기준정보, 계좌/종목 관리, 목표비중 설정, 보유현황, 입출금 등 앱에 저장된 모든 자료가 삭제되며 복구할 수 없습니다.')) return;
+    if(!(await showConfirm('⚠ 정말로 모든 데이터를 초기화하시겠습니까?\n기준정보, 계좌/종목 관리, 목표비중 설정, 보유현황, 입출금 등 앱에 저장된 모든 자료가 삭제되며 복구할 수 없습니다.'))) return;
     Object.values(LS).forEach(key=> localStorage.removeItem(key));
     toast('모든 데이터가 초기화되었습니다.');
   } else if(opt==='rawonly'){
-    if(!confirm('⚠ 보유현황과 입출금 데이터를 삭제하시겠습니까?\n기준정보/계좌 관리/종목 관리/목표비중 설정은 유지되며, raw data와 불러오기 이력만 삭제되고 복구할 수 없습니다.')) return;
+    if(!(await showConfirm('⚠ 보유현황과 입출금 데이터를 삭제하시겠습니까?\n기준정보/계좌 관리/종목 관리/목표비중 설정은 유지되며, raw data와 불러오기 이력만 삭제되고 복구할 수 없습니다.'))) return;
     localStorage.removeItem(LS.holdings);
     localStorage.removeItem(LS.cashflows);
     localStorage.removeItem(LS.lastImport);
